@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useLocale } from '../context/LocaleContext';
 import { useToast } from '../context/ToastContext';
+import emailjs from '@emailjs/browser';
 import { useForm } from 'react-hook-form';
 import { 
   User as UserIcon, Lock, Mail, ShoppingBag, Heart, 
@@ -64,14 +65,35 @@ export const Account: React.FC = () => {
     }
     setLoading(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800)); // Simulating latency
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       setGeneratedOtp(code);
       setOtpSent(true);
-      showToast(`Verification code dispatched to ${emailForOtp}. Check your inbox!`, 'success');
-      showToast(`[Security Test OTP]: ${code}`, 'info'); // Display OTP code in toast for easy testing
-    } catch {
-      showToast('Failed to dispatch verification code.', 'error');
+
+      // EmailJS configurations. Replace these with your actual keys from emailjs.com!
+      const serviceId = 'YOUR_EMAILJS_SERVICE_ID';
+      const templateId = 'YOUR_EMAILJS_TEMPLATE_ID';
+      const publicKey = 'YOUR_EMAILJS_PUBLIC_KEY';
+
+      // Check if credentials are configured
+      if (serviceId.startsWith('YOUR_') || templateId.startsWith('YOUR_') || publicKey.startsWith('YOUR_')) {
+        showToast('Real email delivery pending configuration. Using local sandbox fallback.', 'info');
+        showToast(`Verification code dispatched to ${emailForOtp}. Check your inbox!`, 'success');
+        showToast(`[Security Test OTP]: ${code}`, 'info'); // Local fallback
+      } else {
+        // Send real email via EmailJS
+        const templateParams = {
+          to_email: emailForOtp,
+          otp_code: code,
+          project_name: 'Pravix Store'
+        };
+
+        await emailjs.send(serviceId, templateId, templateParams, publicKey);
+        showToast(`Verification code emailed to ${emailForOtp}!`, 'success');
+      }
+    } catch (err) {
+      console.error('EmailJS error:', err);
+      showToast('Real email delivery failed. Falling back to sandbox OTP.', 'warning');
+      showToast(`[Security Test OTP]: ${generatedOtp}`, 'info');
     } finally {
       setLoading(false);
     }
