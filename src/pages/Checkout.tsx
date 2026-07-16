@@ -6,6 +6,8 @@ import { useAuth } from '../context/AuthContext';
 import type { Address } from '../context/AuthContext';
 import { useLocale } from '../context/LocaleContext';
 import { useToast } from '../context/ToastContext';
+import { openRazorpayCheckout, isRazorpayConfigured, RAZORPAY_KEY_ID } from '../lib/razorpay';
+import type { RazorpayPaymentResponse } from '../lib/razorpay';
 import { 
   CreditCard, Shield, Truck, CheckCircle, Smartphone, 
   MapPin, ShoppingBag, Loader2, ArrowRight, ArrowLeft 
@@ -94,20 +96,8 @@ export const Checkout: React.FC = () => {
 
   const handlePlaceOrder = async () => {
     setIsProcessing(true);
-    
-    // Simulate gateway steps
-    const statusSteps = [
-      'Establishing secure token handshake with payment gateway...',
-      'Verifying account calibration & routing details...',
-      'Processing transactional blockchain blocks...',
-      'Authorization successful. Creating order logs...'
-    ];
 
-    for (let i = 0; i < statusSteps.length; i++) {
-      setProcessingStatus(statusSteps[i]);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-    }
-
+    // Build shipping address from form values
     const shippingAddress: Address = {
       id: Math.random().toString(36).substring(7),
       fullName: formValues.fullName,
@@ -128,6 +118,64 @@ export const Checkout: React.FC = () => {
       quantity: item.quantity,
       image: item.product.images[0],
     }));
+
+    // ─── RAZORPAY REAL PAYMENT ───────────────────────────────────────────────
+    if (paymentMethod === 'Razorpay' && isRazorpayConfigured) {
+      setIsProcessing(false); // Razorpay modal takes over UI
+      const amountInPaise = Math.round(total * 100); // Convert to paise (smallest INR unit)
+
+      try {
+        await openRazorpayCheckout({
+          key: RAZORPAY_KEY_ID,
+          amount: amountInPaise,
+          currency: 'INR',
+          name: 'Pravix Store',
+          description: `Order for ${orderItems.length} item${orderItems.length > 1 ? 's' : ''}`,
+          prefill: {
+            name: shippingAddress.fullName,
+            contact: shippingAddress.phone,
+          },
+          theme: { color: '#6366f1' },
+          handler: (response: RazorpayPaymentResponse) => {
+            // Payment successful — Razorpay returns payment_id
+            const order = addOrder(
+              orderItems,
+              subtotal,
+              tax,
+              shipping,
+              total,
+              shippingAddress,
+              `Razorpay (${response.razorpay_payment_id})`
+            );
+            setCreatedOrder(order);
+            clearCart();
+            showToast(`Payment successful! ID: ${response.razorpay_payment_id}`, 'success');
+          },
+          modal: {
+            ondismiss: () => {
+              showToast('Payment cancelled. Your cart is still saved.', 'info');
+            }
+          }
+        });
+      } catch (err: any) {
+        showToast(err.message || 'Razorpay checkout failed.', 'error');
+      }
+      return;
+    }
+    // ─── END RAZORPAY ────────────────────────────────────────────────────────
+
+    // Simulate gateway steps for other payment methods (Stripe / PayPal)
+    const statusSteps = [
+      'Establishing secure token handshake with payment gateway...',
+      'Verifying account calibration & routing details...',
+      'Processing transactional blockchain blocks...',
+      'Authorization successful. Creating order logs...'
+    ];
+
+    for (let i = 0; i < statusSteps.length; i++) {
+      setProcessingStatus(statusSteps[i]);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
 
     const order = addOrder(
       orderItems,
@@ -411,14 +459,19 @@ export const Checkout: React.FC = () => {
 
                   <button
                     onClick={() => setPaymentMethod('Razorpay')}
-                    className={`p-4 rounded-xl border text-center transition-all flex flex-col items-center gap-2 cursor-pointer ${
+                    className={`p-4 rounded-xl border text-center transition-all flex flex-col items-center gap-2 cursor-pointer relative ${
                       paymentMethod === 'Razorpay'
                         ? 'border-indigo-500 bg-indigo-500/5 text-indigo-500 font-bold'
                         : 'border-slate-200 dark:border-slate-800 hover:border-slate-300'
                     }`}
                   >
+                    {isRazorpayConfigured && (
+                      <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full shadow">
+                        LIVE
+                      </span>
+                    )}
                     <Smartphone className="w-6 h-6" />
-                    <span className="text-xs">UPI / Net (Razorpay)</span>
+                    <span className="text-xs">UPI / Cards (Razorpay)</span>
                   </button>
 
                   <button
