@@ -4,11 +4,10 @@ import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 import { useLocale } from '../context/LocaleContext';
 import { useToast } from '../context/ToastContext';
-import emailjs from '@emailjs/browser';
 import { useForm } from 'react-hook-form';
 import { 
   User as UserIcon, Lock, Mail, ShoppingBag, Heart, 
-  MapPin, Settings, Power, Plus, Trash, Shield 
+  MapPin, Settings, Power, Plus, Trash, Shield, Clock, Loader2 
 } from 'lucide-react';
 
 export const Account: React.FC = () => {
@@ -20,7 +19,8 @@ export const Account: React.FC = () => {
   const { showToast } = useToast();
   const { 
     user, addresses, orders, login, register, 
-    logout, forgotPassword, addAddress, removeAddress, updateProfile 
+    logout, forgotPassword, addAddress, removeAddress, updateProfile,
+    sendOtp, verifyOtp
   } = useAuth();
   
   const { wishlist, toggleWishlist, addToCart } = useCart();
@@ -46,9 +46,17 @@ export const Account: React.FC = () => {
   // OTP Login states
   const [loginMethod, setLoginMethod] = useState<'password' | 'otp'>('password');
   const [otpSent, setOtpSent] = useState(false);
-  const [generatedOtp, setGeneratedOtp] = useState('');
   const [enteredOtp, setEnteredOtp] = useState('');
   const [emailForOtp, setEmailForOtp] = useState('');
+  const [countdown, setCountdown] = useState(0);
+
+  // Countdown timer effect
+  useEffect(() => {
+    if (countdown > 0) {
+      const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [countdown]);
 
   // Forms
   const { register: regLogin, handleSubmit: handleLoginSubmit } = useForm();
@@ -63,37 +71,32 @@ export const Account: React.FC = () => {
       showToast('Please enter an email identifier.', 'error');
       return;
     }
+
+    // Simple email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailForOtp)) {
+      showToast('Please enter a valid email address.', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedOtp(code);
-      setOtpSent(true);
-
-      // EmailJS configurations. Replace these with your actual keys from emailjs.com!
-      const serviceId = 'YOUR_EMAILJS_SERVICE_ID';
-      const templateId = 'YOUR_EMAILJS_TEMPLATE_ID';
-      const publicKey = 'YOUR_EMAILJS_PUBLIC_KEY';
-
-      // Check if credentials are configured
-      if (serviceId.startsWith('YOUR_') || templateId.startsWith('YOUR_') || publicKey.startsWith('YOUR_')) {
-        showToast('Real email delivery pending configuration. Using local sandbox fallback.', 'info');
+      const { success, error } = await sendOtp(emailForOtp);
+      if (success) {
+        setOtpSent(true);
+        setCountdown(60);
         showToast(`Verification code dispatched to ${emailForOtp}. Check your inbox!`, 'success');
-        showToast(`[Security Test OTP]: ${code}`, 'info'); // Local fallback
-      } else {
-        // Send real email via EmailJS
-        const templateParams = {
-          to_email: emailForOtp,
-          otp_code: code,
-          project_name: 'Pravix Store'
-        };
 
-        await emailjs.send(serviceId, templateId, templateParams, publicKey);
-        showToast(`Verification code emailed to ${emailForOtp}!`, 'success');
+        // Check if sandbox mock OTP exists in local storage (fallback mode)
+        const mockCode = localStorage.getItem(`mock_otp_${emailForOtp.toLowerCase()}`);
+        if (mockCode) {
+          showToast(`[Security Test OTP]: ${mockCode}`, 'info');
+        }
+      } else {
+        showToast(error || 'Failed to dispatch verification code.', 'error');
       }
     } catch (err) {
-      console.error('EmailJS error:', err);
-      showToast('Real email delivery failed. Falling back to sandbox OTP.', 'warning');
-      showToast(`[Security Test OTP]: ${generatedOtp}`, 'info');
+      showToast('Network error during OTP request.', 'error');
     } finally {
       setLoading(false);
     }
@@ -106,25 +109,26 @@ export const Account: React.FC = () => {
       showToast('Please enter the 6-digit verification code.', 'error');
       return;
     }
-    if (enteredOtp !== generatedOtp) {
-      showToast('Invalid verification code parameters.', 'error');
+    if (enteredOtp.length !== 6) {
+      showToast('Please enter a complete 6-digit code.', 'error');
       return;
     }
 
     setLoading(true);
     try {
-      const simulatedPassword = emailForOtp.toLowerCase() === 'pravixp5@gmail.com' ? 'admin' : 'otp-backdoor';
-      const ok = await login(emailForOtp, simulatedPassword);
-      if (ok) {
+      const { success, error } = await verifyOtp(emailForOtp, enteredOtp);
+      if (success) {
         showToast('OTP authorized. Login successful.', 'success');
         if (redirect === 'checkout') {
           navigate('/checkout');
         } else {
           setMode('dashboard');
         }
+      } else {
+        showToast(error || 'Incorrect verification code. Please check parameters.', 'error');
       }
-    } catch {
-      showToast('Authentication protocol failed.', 'error');
+    } catch (err) {
+      showToast('Network error during OTP validation.', 'error');
     } finally {
       setLoading(false);
     }
@@ -302,13 +306,25 @@ export const Account: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full py-3 rounded-xl bg-slate-900 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-white font-bold text-sm shadow transition-colors cursor-pointer flex items-center justify-center"
-                  >
-                    {loading ? 'Generating Code...' : 'Send Verification OTP'}
-                  </button>
+                  {countdown > 0 ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full py-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 font-bold text-sm flex items-center justify-center gap-1.5 shadow-inner"
+                    >
+                      <Clock className="w-4 h-4 text-indigo-500 animate-pulse" />
+                      <span>Resend OTP in {countdown}s</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full py-3 rounded-xl bg-slate-900 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-white font-bold text-sm shadow transition-colors cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {loading && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+                      <span>{loading ? 'Generating Code...' : 'Send Verification OTP'}</span>
+                    </button>
+                  )}
                 </form>
               ) : (
                 <form onSubmit={handleVerifyOtp} className="flex flex-col gap-4">
@@ -340,9 +356,10 @@ export const Account: React.FC = () => {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="w-full py-3 rounded-xl bg-slate-900 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-white font-bold text-sm shadow transition-colors cursor-pointer flex items-center justify-center"
+                    className="w-full py-3 rounded-xl bg-slate-900 hover:bg-indigo-600 dark:bg-slate-800 dark:hover:bg-indigo-600 text-white font-bold text-sm shadow transition-colors cursor-pointer flex items-center justify-center gap-2"
                   >
-                    {loading ? 'Verifying...' : 'Verify & Authorize Login'}
+                    {loading && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+                    <span>{loading ? 'Verifying...' : 'Verify & Authorize Login'}</span>
                   </button>
                 </form>
               )}

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export interface User {
   id: string;
@@ -53,6 +54,8 @@ interface AuthContextType {
   removeAddress: (id: string) => void;
   addOrder: (items: OrderItem[], subtotal: number, tax: number, shipping: number, total: number, shippingAddress: Address, paymentMethod: string) => Order;
   updateProfile: (username: string, email: string, avatar: string) => void;
+  sendOtp: (email: string) => Promise<{ success: boolean; error: string | null }>;
+  verifyOtp: (email: string, token: string) => Promise<{ success: boolean; error: string | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -131,6 +134,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('auth_orders', JSON.stringify(orders));
   }, [orders]);
 
+  // Load and listen to Supabase Auth state changes if configured
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    // Check current session on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        const email = session.user.email || '';
+        const isAdmin = email.toLowerCase().startsWith('admin') || email.toLowerCase() === 'pravixp5@gmail.com';
+        setUser({
+          id: session.user.id,
+          username: session.user.user_metadata?.username || email.split('@')[0],
+          email: email,
+          isAdmin: isAdmin,
+          avatar: session.user.user_metadata?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`,
+        });
+      }
+    });
+
+    // Listen to changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const email = session.user.email || '';
+        const isAdmin = email.toLowerCase().startsWith('admin') || email.toLowerCase() === 'pravixp5@gmail.com';
+        setUser({
+          id: session.user.id,
+          username: session.user.user_metadata?.username || email.split('@')[0],
+          email: email,
+          isAdmin: isAdmin,
+          avatar: session.user.user_metadata?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`,
+        });
+      } else {
+        setUser(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
   const login = async (email: string, password: string): Promise<boolean> => {
     // Simulated authentication API latency
     await new Promise((resolve) => setTimeout(resolve, 600));
@@ -168,14 +212,74 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return true;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
     setUser(null);
+    localStorage.removeItem('auth_user');
   };
 
   const forgotPassword = async (email: string): Promise<boolean> => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     if (email) { /* Simulated dispatch logic */ }
     return true;
+  };
+
+  const sendOtp = async (email: string): Promise<{ success: boolean; error: string | null }> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+        }
+      });
+      if (error) return { success: false, error: error.message };
+      return { success: true, error: null };
+    } else {
+      // Local fallback simulation
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      localStorage.setItem(`mock_otp_${email.toLowerCase()}`, code);
+      return { success: true, error: null };
+    }
+  };
+
+  const verifyOtp = async (email: string, token: string): Promise<{ success: boolean; error: string | null }> => {
+    if (isSupabaseConfigured) {
+      const { error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'email',
+      });
+      if (error) {
+        // Try magiclink type just in case
+        const { error: retryError } = await supabase.auth.verifyOtp({
+          email,
+          token,
+          type: 'magiclink',
+        });
+        if (retryError) return { success: false, error: retryError.message };
+      }
+      return { success: true, error: null };
+    } else {
+      // Local fallback validation
+      const savedCode = localStorage.getItem(`mock_otp_${email.toLowerCase()}`);
+      if (savedCode && savedCode === token) {
+        localStorage.removeItem(`mock_otp_${email.toLowerCase()}`);
+        
+        const isAdmin = email.toLowerCase().startsWith('admin') || email.toLowerCase() === 'pravixp5@gmail.com';
+        const newUser: User = {
+          id: Math.random().toString(36).substring(7),
+          username: email.toLowerCase() === 'pravixp5@gmail.com' ? 'Pravix' : (isAdmin ? 'SysAdmin Core' : email.split('@')[0]),
+          email: email,
+          isAdmin: isAdmin,
+          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${email}`,
+        };
+        setUser(newUser);
+        return { success: true, error: null };
+      }
+      return { success: false, error: 'Incorrect verification code. Please check code parameters.' };
+    }
   };
 
   const addAddress = (address: Omit<Address, 'id'>) => {
@@ -243,6 +347,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       removeAddress,
       addOrder,
       updateProfile,
+      sendOtp,
+      verifyOtp,
     }}>
       {children}
     </AuthContext.Provider>
